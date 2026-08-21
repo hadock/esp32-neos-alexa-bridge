@@ -244,11 +244,22 @@ would cause on its own.
 
 ## Recovery: factory-resetting the Matter node
 
-Send `factory-reset` over the serial console to wipe the device's Matter
-fabric/commissioning/subscription state and reboot. Remove the device(s)
-from the Alexa app first, then send the command, then re-add them via
-Add Device -> Matter using the fresh pairing code the serial console
-prints. Reasons you'd want this:
+Two ways to trigger this:
+
+- Send `factory-reset` over the serial console.
+- Visit `http://<device-ip>:8080/` in a browser on the same WiFi network
+  and click "Factory Reset" -- useful once the board is mounted somewhere
+  the USB port isn't reachable. This page also shows commissioning
+  status, the pairing code/QR link when uncommissioned, free heap, and
+  each sensor's last-known state, with no authentication (it trusts the
+  local WiFi network as its security boundary -- don't port-forward it
+  to the internet).
+
+Either way, this wipes the device's Matter fabric/commissioning/
+subscription state and reboots. Remove the device(s) from the Alexa app
+first, then trigger the reset, then re-add them via Add Device -> Matter
+using the fresh pairing code (serial console, or the web page above).
+Reasons you'd want this:
 
 - Moving the device to a different Alexa account or location.
 - Recovering from a pile of stale subscription-resumption entries: during
@@ -278,6 +289,19 @@ A normally-used device with one real, stable Alexa subscription shouldn't
 accumulate enough entries to hit either of these in practice; both showed
 up here specifically because of the unusually heavy re-flashing/re-pairing
 churn of active development.
+
+**A genuine full power-off (not just a soft reset) has also been observed
+to retrigger this same subscription staleness**, even on a device that had
+been working reliably for hours beforehand, with no re-flashing or
+re-pairing in between. We haven't root-caused why a complete power cycle
+specifically (as opposed to the many soft/EN-pin resets used throughout
+this project's own testing, which didn't show this) makes a difference --
+it may be Alexa-side session-timeout behavior tied to how long the device
+is off the network. Practically: this project is recoverable via
+factory-reset, not proven bulletproof against every kind of power event.
+If you're installing this somewhere power might blip, the web-based
+recovery above is there specifically so that doesn't mean a trip up a
+ladder.
 
 ## Repository layout
 

@@ -22,6 +22,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WebServer.h>
 #include <Preferences.h>
 #include <Matter.h>
 #include <EspUsbHost.h>
@@ -249,6 +250,22 @@ static void connectWiFi() {
   }
 }
 
+// Wipes the Matter fabric/ACL/subscription-resumption table so the node can
+// be recommissioned clean. Useful after moving the device to a new Alexa
+// account/location, after accumulating enough stale persisted subscriptions
+// that Matter.begin() can no longer resume any of them without exhausting
+// heap, or after the kind of subscription staleness a full power-cycle can
+// trigger (see README's "Recovery" section) -- reachable both from the
+// serial console and, once the device is mounted somewhere the USB port
+// isn't reachable, from the web status page on port 8080.
+static void PerformFactoryReset() {
+  Serial.println("=== Factory-resetting Matter state and rebooting... ===");
+  delay(100);
+  Matter.decommission();
+  delay(500);
+  ESP.restart();
+}
+
 // Handles one line of serial input: "p" to pair a new sensor, "factory-reset"
 // to wipe Matter commissioning/subscription state.
 static void handleSerialLine(String line) {
@@ -266,21 +283,79 @@ static void handleSerialLine(String line) {
   }
 
   if (line == "factory-reset") {
-    // Wipes the Matter fabric/ACL/subscription-resumption table so the node
-    // can be recommissioned clean. Useful after moving the device to a new
-    // Alexa account/location, or (as discovered during development) after
-    // accumulating enough stale persisted subscriptions from repeated
-    // recommissioning that Matter.begin() can no longer resume any of them
-    // without exhausting heap.
-    Serial.println("=== Factory-resetting Matter state and rebooting... ===");
-    delay(100);
-    Matter.decommission();
-    delay(500);
-    ESP.restart();
+    PerformFactoryReset();
     return;
   }
 
   Serial.println("Unknown command. Commands: p (pair new sensor), factory-reset (wipe Matter state)");
+}
+
+static WebServer webServer(8080);
+
+static String BuildStatusPage() {
+  String html = F(
+      "<!DOCTYPE html><html><head><title>NEOS Bridge</title>"
+      "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+      "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:0 1em}"
+      "table{width:100%;border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:left}"
+      "button{background:#b91c1c;color:#fff;border:0;padding:.7em 1.2em;border-radius:6px;font-size:1em}</style>"
+      "</head><body><h2>NEOS/WyzeSense Bridge</h2>");
+
+  html += "<p><b>Matter:</b> ";
+  html += Matter.isDeviceCommissioned() ? "commissioned" : "NOT commissioned";
+  html += "</p>";
+  if (!Matter.isDeviceCommissioned()) {
+    html += "<p><b>Pairing code:</b> " + Matter.getManualPairingCode() + "<br>";
+    html += "<a href=\"" + Matter.getOnboardingQRCodeUrl() + "\" target=\"_blank\">QR code link</a></p>";
+  }
+
+  html += "<p><b>WiFi:</b> " + WiFi.localIP().toString() + "</p>";
+  html += "<p><b>Dongle:</b> ";
+  html += (g_dongle && g_dongle->IsReady()) ? "ready" : "not ready";
+  html += "</p>";
+  html += "<p><b>Free heap:</b> " + String(ESP.getFreeHeap()) + " bytes (min " + String(ESP.getMinFreeHeap()) + ")</p>";
+
+  html += F("<h3>Sensors</h3><table><tr><th>MAC</th><th>Type</th><th>Slot</th><th>Last known state</th></tr>");
+  for (size_t i = 0; i < kMaxContact; i++) {
+    if (!gContactSlot[i].inUse) continue;
+    bool lastOpen = prefsContactState.isKey(gContactSlot[i].mac) && prefsContactState.getBool(gContactSlot[i].mac);
+    html += "<tr><td>" + String(gContactSlot[i].mac) + "</td><td>contact</td><td>" + String(i) +
+            "</td><td>" + (lastOpen ? "open" : "closed") + "</td></tr>";
+  }
+  for (size_t i = 0; i < kMaxMotion; i++) {
+    if (!gMotionSlot[i].inUse) continue;
+    html += "<tr><td>" + String(gMotionSlot[i].mac) + "</td><td>motion</td><td>" + String(i) + "</td><td>--</td></tr>";
+  }
+  html += F("</table>");
+
+  html += F(
+      "<h3>Recovery</h3>"
+      "<p>Wipes Matter commissioning/subscription state and reboots. "
+      "You'll need to remove the device from Alexa and re-add it afterward.</p>"
+      "<form method='POST' action='/factory-reset' "
+      "onsubmit=\"return confirm('Factory-reset the Matter node? "
+      "You will need to recommission it in Alexa afterward.');\">"
+      "<button type='submit'>Factory Reset</button></form>"
+      "</body></html>");
+  return html;
+}
+
+// No authentication on this endpoint -- it trusts the local WiFi network as
+// the security boundary (same trust level as the serial console it mirrors).
+// Fine for a home network; don't port-forward this to the internet.
+static void SetupWebServer() {
+  webServer.on("/", HTTP_GET, []() {
+    webServer.send(200, "text/html", BuildStatusPage());
+  });
+
+  webServer.on("/factory-reset", HTTP_POST, []() {
+    webServer.send(200, "text/html", "<!DOCTYPE html><html><body><p>Factory-resetting and rebooting now...</p></body></html>");
+    delay(200);  // let the response actually flush before the reboot cuts the connection
+    PerformFactoryReset();
+  });
+
+  webServer.begin();
+  Serial.println("Web status/recovery server listening on port 8080");
 }
 
 void setup() {
@@ -297,6 +372,7 @@ void setup() {
 
   connectWiFi();
   Serial.printf("[heap] after WiFi connect: free=%u min_free=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+  SetupWebServer();
 
   // All Matter endpoints must be created before Matter.begin() is called.
   for (size_t i = 0; i < kMaxContact; i++) gContact[i].begin();
@@ -410,6 +486,8 @@ void setup() {
 
 void loop() {
   uint32_t now = millis();
+
+  webServer.handleClient();
 
   if (g_handshakePending && (now - g_connectedAtMs) >= kHandshakeSettleMs) {
     g_handshakePending = false;
