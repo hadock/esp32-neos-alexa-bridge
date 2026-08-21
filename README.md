@@ -47,24 +47,37 @@ opens...") the same way they would with any commercial smart-home sensor.
 
 ### Wiring
 
+![Assembled board with the bridge dongle plugged into the native USB port](docs/images/assembled-board.jpeg)
+
 The board has two USB-C ports:
 
 - **"UART" port** -- stays connected to your computer for flashing and the
   serial console (`Serial.print`). This project deliberately never enables
   `ARDUINO_USB_CDC_ON_BOOT`, so this port always behaves like a normal
   UART-over-USB serial adapter.
-- **Native "USB" port** (the pins broken out as GPIO19=D-/GPIO20=D+) --
-  this is what EspUsbHost drives in host mode to talk to the bridge dongle.
-  Wire the bridge's USB D+/D- to GPIO20/GPIO19.
+- **Native "USB" port** (internally wired to GPIO19=D-/GPIO20=D+, confirmed
+  against this board's own pinout reference below) -- this is what
+  EspUsbHost drives in host mode to talk to the bridge dongle.
+
+| ESP32-S3 pin | Signal          | Connects to                                   |
+|--------------|-----------------|------------------------------------------------|
+| GPIO20       | USB D+          | Bridge dongle D+                                |
+| GPIO19       | USB D-          | Bridge dongle D-                                |
+| --           | 5V (external)   | Bridge dongle VBUS, from a separate USB-A/wall charger -- **not** the board's own USB port power (see below) |
+| --           | GND (external)  | Bridge dongle GND, common with the ESP32's own GND |
+
+![ESP32-S3 pinout reference showing GPIO19/GPIO20 as USB D-/D+](docs/images/esp32-s3-n16r8-pinout.jpeg)
 
 The board's native USB port's own VBUS pin can't supply enough power to
 the bridge dongle in host mode on this hardware (its schematic only
 allows power to flow *into* the LDO from that port, not back out to a
 downstream device). Power the bridge from a separate 5V source instead:
-solder a standalone USB-A male (or just its power leads) to a wall charger
-and tie its VBUS/GND directly to the bridge connector's VBUS/GND pads,
-independent of the devkit's own USB port. Common ground with the ESP32 is
-required.
+a small perfboard adapter carries the dongle's D+/D-/GND to a USB-C plug
+for the board's native USB port, while VBUS/GND for the dongle itself
+come from a second, independent USB-A cable into a wall charger. Common
+ground between the two power sources and the ESP32 is required.
+
+![Back of the perfboard adapter, showing the dongle's D+/D- wired to the native-USB plug and a separate power cable](docs/images/bridge-wiring-adapter.jpeg)
 
 ## Setup
 
