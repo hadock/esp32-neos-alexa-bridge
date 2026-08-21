@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 420" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="860" height="420" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="430" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#222">
+    WyzeSense Bridge Dongle -- Wiring
+  </text>
+
+  <!-- External 5V source box -->
+  <rect x="30" y="150" width="200" height="110" rx="10" fill="#fff4e5" stroke="#d97706" stroke-width="2"/>
+  <text x="130" y="185" text-anchor="middle" font-size="15" font-weight="bold" fill="#92400e">External 5V Source</text>
+  <text x="130" y="205" text-anchor="middle" font-size="12" fill="#92400e">(wall charger via</text>
+  <text x="130" y="220" text-anchor="middle" font-size="12" fill="#92400e">a spare USB-A cable)</text>
+  <text x="130" y="242" text-anchor="middle" font-size="11" fill="#b45309">NOT the board's own USB port --</text>
+  <text x="130" y="256" text-anchor="middle" font-size="11" fill="#b45309">its VBUS can't power the dongle</text>
+
+  <!-- Bridge dongle box -->
+  <rect x="340" y="120" width="180" height="180" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="430" y="148" text-anchor="middle" font-size="15" font-weight="bold" fill="#312e81">WyzeSense Bridge</text>
+  <text x="430" y="165" text-anchor="middle" font-size="15" font-weight="bold" fill="#312e81">Dongle</text>
+  <text x="430" y="185" text-anchor="middle" font-size="11" fill="#4338ca">(USB-A connector,</text>
+  <text x="430" y="199" text-anchor="middle" font-size="11" fill="#4338ca">VID:PID 1a86:e024)</text>
+
+  <!-- Dongle pin labels (inside, right edge, facing ESP32) -->
+  <text x="510" y="230" text-anchor="end" font-size="12" fill="#1d4ed8">D+</text>
+  <text x="510" y="250" text-anchor="end" font-size="12" fill="#1d4ed8">D-</text>
+  <text x="510" y="270" text-anchor="end" font-size="12" fill="#111827">GND</text>
+
+  <!-- Dongle pin labels (inside, left edge, facing external power) -->
+  <text x="350" y="230" text-anchor="start" font-size="12" fill="#b45309">VBUS</text>
+  <text x="350" y="270" text-anchor="start" font-size="12" fill="#111827">GND</text>
+
+  <!-- ESP32-S3 board box -->
+  <rect x="630" y="90" width="200" height="240" rx="10" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+  <text x="730" y="120" text-anchor="middle" font-size="15" font-weight="bold" fill="#065f46">ESP32-S3 Board</text>
+  <text x="730" y="138" text-anchor="middle" font-size="11" fill="#047857">(native USB-OTG port,</text>
+  <text x="730" y="152" text-anchor="middle" font-size="11" fill="#047857">EspUsbHost in host mode)</text>
+
+  <text x="645" y="230" text-anchor="start" font-size="12" fill="#1d4ed8">GPIO20 (D+)</text>
+  <text x="645" y="250" text-anchor="start" font-size="12" fill="#1d4ed8">GPIO19 (D-)</text>
+  <text x="645" y="270" text-anchor="start" font-size="12" fill="#111827">GND</text>
+
+  <!-- Wires: external 5V -> dongle -->
+  <line x1="230" y1="227" x2="340" y2="227" stroke="#d97706" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="285" y="220" text-anchor="middle" font-size="11" fill="#92400e">VBUS (5V)</text>
+
+  <line x1="230" y1="267" x2="340" y2="267" stroke="#111827" stroke-width="2.5"/>
+  <text x="285" y="283" text-anchor="middle" font-size="11" fill="#111827">GND</text>
+
+  <!-- Wires: dongle -> ESP32 -->
+  <line x1="520" y1="227" x2="630" y2="227" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="575" y="220" text-anchor="middle" font-size="11" fill="#1d4ed8">D+</text>
+
+  <line x1="520" y1="247" x2="630" y2="247" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="575" y="240" text-anchor="middle" font-size="11" fill="#1d4ed8">D-</text>
+
+  <line x1="520" y1="267" x2="630" y2="267" stroke="#111827" stroke-width="2.5"/>
+  <text x="575" y="283" text-anchor="middle" font-size="11" fill="#111827">GND</text>
+
+  <!-- Note about shared ground -->
+  <text x="430" y="360" text-anchor="middle" font-size="12" fill="#374151">
+    GND is one shared pin on the dongle's own USB-A connector -- it ties the ESP32's ground and the
+  </text>
+  <text x="430" y="378" text-anchor="middle" font-size="12" fill="#374151">
+    external 5V source's ground together. No separate ground wire between the ESP32 and the power source needed.
+  </text>
+
+  <text x="430" y="404" text-anchor="middle" font-size="11" fill="#6b7280">
+    Physically: a small perfboard adapter carries D+/D-/GND to a USB-C plug for the ESP32's port; VBUS/GND for the dongle come from a second cable.
+  </text>
+</svg>

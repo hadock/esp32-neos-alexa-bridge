@@ -66,6 +66,8 @@ The board has two USB-C ports:
 | --           | 5V (external)   | Bridge dongle VBUS, from a separate USB-A/wall charger -- **not** the board's own USB port power (see below) |
 | --           | GND (external)  | Bridge dongle GND, common with the ESP32's own GND |
 
+![Wiring diagram: external 5V source and ESP32-S3 both connecting to the bridge dongle](docs/images/wiring-diagram.svg)
+
 ![ESP32-S3 pinout reference showing GPIO19/GPIO20 as USB D-/D+](docs/images/esp32-s3-n16r8-pinout.jpeg)
 
 The board's native USB port's own VBUS pin can't supply enough power to
