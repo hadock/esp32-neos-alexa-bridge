@@ -107,7 +107,10 @@ WiFi network and a small setup page instead of trying to connect
 anywhere:
 
 1. Connect your phone or laptop to the **`esp_neos_bridge`** WiFi
-   network (open, no password).
+   network (open, no password). Most phones/laptops should pop the setup
+   page open automatically here (the device runs a captive-portal DNS
+   trick, the same mechanism hotel/coffee-shop WiFi sign-in pages use) --
+   if yours doesn't, continue to step 2.
 2. Visit **http://192.168.4.1/** in a browser.
 3. Pick your home network from the dropdown (populated from a scan the
    device runs right before starting its own network) and enter its
@@ -279,13 +282,14 @@ Two ways to trigger this:
 - Send `factory-reset` over the serial console.
 - Visit `http://<device-ip>:8080/` in a browser on the same WiFi network
   and click "Factory Reset" -- useful once the board is mounted somewhere
-  the USB port isn't reachable. This page also shows commissioning
-  status, live USB-bridge-connected/dongle-ready/pairing-mode indicators,
-  pairing controls, the pairing code/QR link when uncommissioned, free
-  heap, and each sensor's last-known state, with no authentication (it
-  trusts the
-  local WiFi network as its security boundary -- don't port-forward it
-  to the internet).
+  the USB port isn't reachable. This page walks through setup in order
+  (USB bridge connected -> dongle handshake ready -> pair a sensor -> link
+  with Alexa), auto-refreshing while waiting on hardware and only showing
+  each later section once it's actually relevant, then settles into a
+  normal dashboard: live status indicators, pairing controls, the pairing
+  code/QR link when uncommissioned, free heap, and each sensor's
+  last-known state. No authentication (it trusts the local WiFi network
+  as its security boundary -- don't port-forward it to the internet).
 
 Either way, this wipes the device's Matter fabric/commissioning/
 subscription state and reboots. Remove the device(s) from the Alexa app
