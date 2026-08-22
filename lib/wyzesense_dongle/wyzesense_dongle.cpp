@@ -87,6 +87,16 @@ void Dongle::StartScan(uint32_t nowMs, uint32_t timeoutMs, ScanResultFn cb) {
   EnterState(DongleState::kScanEnabling, nowMs);
 }
 
+void Dongle::CancelScan(uint32_t nowMs) {
+  if (state_ != DongleState::kScanWaiting) {
+    Log("Dongle: CancelScan() ignored, no scan waiting for a sensor");
+    return;
+  }
+  Log("Dongle: scan cancelled");
+  scanFound_ = false;
+  EnterState(DongleState::kScanDisabling, nowMs);
+}
+
 void Dongle::EnterState(DongleState s, uint32_t nowMs) {
   state_ = s;
   stateDeadlineMs_ = nowMs + kCmdTimeoutMs;

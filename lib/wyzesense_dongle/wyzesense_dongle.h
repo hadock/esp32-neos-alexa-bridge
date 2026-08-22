@@ -94,6 +94,14 @@ class Dongle {
   // already in progress.
   void StartScan(uint32_t nowMs, uint32_t timeoutMs, ScanResultFn cb);
 
+  // Ends an in-progress scan early, before its timeout -- same effect as
+  // the scan timing out on its own (disables scanning, then calls the
+  // ScanResultFn with found=false). No-op (with a log message) if no scan
+  // is currently waiting for a sensor to announce itself.
+  void CancelScan(uint32_t nowMs);
+
+  bool IsScanning() const { return state_ == DongleState::kScanWaiting; }
+
  private:
   void SendPacket(const Packet &p);
   void HandlePacket(const Packet &p);

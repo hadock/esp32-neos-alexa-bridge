@@ -266,6 +266,21 @@ static void PerformFactoryReset() {
   ESP.restart();
 }
 
+// Shared by the serial "p" command and the web UI's pairing button.
+static void StartPairing() {
+  if (g_dongle && g_dongle->IsReady()) {
+    Serial.println("=== Pairing mode: trigger the new sensor's pairing broadcast now (60s window) ===");
+    g_dongle->StartScan(millis(), kScanTimeoutMs, onScanResult);
+  } else {
+    Serial.println("Dongle not ready yet, can't start pairing.");
+  }
+}
+
+// Ends pairing mode early. Harmless no-op if no scan is in progress.
+static void StopPairing() {
+  if (g_dongle) g_dongle->CancelScan(millis());
+}
+
 // Handles one line of serial input: "p" to pair a new sensor, "factory-reset"
 // to wipe Matter commissioning/subscription state.
 static void handleSerialLine(String line) {
@@ -273,12 +288,7 @@ static void handleSerialLine(String line) {
   if (line.length() == 0) return;
 
   if (line == "p" || line == "P") {
-    if (g_dongle && g_dongle->IsReady()) {
-      Serial.println("=== Pairing mode: trigger the new sensor's pairing broadcast now (60s window) ===");
-      g_dongle->StartScan(millis(), kScanTimeoutMs, onScanResult);
-    } else {
-      Serial.println("Dongle not ready yet, can't start pairing.");
-    }
+    StartPairing();
     return;
   }
 
@@ -298,7 +308,10 @@ static String BuildStatusPage() {
       "<meta name='viewport' content='width=device-width, initial-scale=1'>"
       "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:0 1em}"
       "table{width:100%;border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:left}"
-      "button{background:#b91c1c;color:#fff;border:0;padding:.7em 1.2em;border-radius:6px;font-size:1em}</style>"
+      "button{border:0;padding:.7em 1.2em;border-radius:6px;font-size:1em;margin-right:.5em}"
+      ".danger{background:#b91c1c;color:#fff}.action{background:#2563eb;color:#fff}"
+      ".dot{display:inline-block;width:.7em;height:.7em;border-radius:50%;margin-right:.4em}"
+      ".dot-ok{background:#16a34a}.dot-bad{background:#dc2626}</style>"
       "</head><body><h2>NEOS/WyzeSense Bridge</h2>");
 
   html += "<p><b>Matter:</b> ";
@@ -310,9 +323,34 @@ static String BuildStatusPage() {
   }
 
   html += "<p><b>WiFi:</b> " + WiFi.localIP().toString() + "</p>";
-  html += "<p><b>Dongle:</b> ";
-  html += (g_dongle && g_dongle->IsReady()) ? "ready" : "not ready";
+
+  bool usbOk = g_bridgeConnected;
+  html += "<p><span class='dot ";
+  html += usbOk ? "dot-ok" : "dot-bad";
+  html += "'></span><b>USB bridge:</b> ";
+  html += usbOk ? "connected" : "not connected";
   html += "</p>";
+
+  bool dongleOk = g_dongle && g_dongle->IsReady();
+  html += "<p><span class='dot ";
+  html += dongleOk ? "dot-ok" : "dot-bad";
+  html += "'></span><b>Dongle handshake:</b> ";
+  html += dongleOk ? "ready" : "not ready";
+  html += "</p>";
+
+  bool scanning = g_dongle && g_dongle->IsScanning();
+  html += "<p><span class='dot ";
+  html += scanning ? "dot-ok" : "dot-bad";
+  html += "'></span><b>Pairing mode:</b> ";
+  html += scanning ? "ACTIVE -- trigger the new sensor's pairing action now" : "inactive";
+  html += "</p>";
+  html += "<form style='display:inline' method='POST' action='/pair-start'><button type='submit' class='action'";
+  if (scanning || !dongleOk) html += " disabled";
+  html += ">Start Pairing</button></form>";
+  html += "<form style='display:inline' method='POST' action='/pair-stop'><button type='submit' class='action'";
+  if (!scanning) html += " disabled";
+  html += ">Stop Pairing</button></form>";
+
   html += "<p><b>Free heap:</b> " + String(ESP.getFreeHeap()) + " bytes (min " + String(ESP.getMinFreeHeap()) + ")</p>";
 
   html += F("<h3>Sensors</h3><table><tr><th>MAC</th><th>Type</th><th>Slot</th><th>Last known state</th></tr>");
@@ -335,7 +373,7 @@ static String BuildStatusPage() {
       "<form method='POST' action='/factory-reset' "
       "onsubmit=\"return confirm('Factory-reset the Matter node? "
       "You will need to recommission it in Alexa afterward.');\">"
-      "<button type='submit'>Factory Reset</button></form>"
+      "<button type='submit' class='danger'>Factory Reset</button></form>"
       "</body></html>");
   return html;
 }
@@ -352,6 +390,18 @@ static void SetupWebServer() {
     webServer.send(200, "text/html", "<!DOCTYPE html><html><body><p>Factory-resetting and rebooting now...</p></body></html>");
     delay(200);  // let the response actually flush before the reboot cuts the connection
     PerformFactoryReset();
+  });
+
+  webServer.on("/pair-start", HTTP_POST, []() {
+    StartPairing();
+    webServer.sendHeader("Location", "/");
+    webServer.send(303);
+  });
+
+  webServer.on("/pair-stop", HTTP_POST, []() {
+    StopPairing();
+    webServer.sendHeader("Location", "/");
+    webServer.send(303);
   });
 
   webServer.begin();

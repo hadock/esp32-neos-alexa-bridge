@@ -204,6 +204,31 @@ int main() {
   Check("scan2 found nothing", !scan2Found);
   Check("dongle ready again after scan2 timeout", dongle.IsReady());
 
+  // --- CancelScan(): early cancel, well before the timeout ---
+  bool scan3CbCalled = false;
+  bool scan3Found = true;  // start true so a missed callback would show up as a failure below
+
+  dongle.StartScan(t, 60000, [&](bool found, const char *, uint8_t, uint8_t) {
+    scan3CbCalled = true;
+    scan3Found = found;
+  });
+  feed(BuildResponse(CMD_START_STOP_SCAN + 1, &scanEnableOk, 1));  // EnableScan response
+  Check("IsScanning() true once waiting for a sensor", dongle.IsScanning());
+  Check("scan3 not yet resolved after EnableScan ack", !scan3CbCalled);
+
+  dongle.CancelScan(t + 5);  // cancel almost immediately, nowhere near the 60s timeout
+  Check("IsScanning() false once cancelled", !dongle.IsScanning());
+  Check("scan3 not yet resolved right after CancelScan (DisableScan still pending)", !scan3CbCalled);
+
+  feed(BuildResponse(CMD_START_STOP_SCAN + 1, &scanEnableOk, 1));  // DisableScan response
+  Check("scan3 callback fired (cancel path)", scan3CbCalled);
+  Check("scan3 found nothing", !scan3Found);
+  Check("dongle ready again after scan3 cancel", dongle.IsReady());
+
+  // CancelScan() outside of an active scan should be a harmless no-op.
+  dongle.CancelScan(t + 10);
+  Check("dongle still ready after a no-op CancelScan()", dongle.IsReady());
+
   if (g_failures == 0) {
     printf("\nAll dongle tests passed.\n");
   } else {

@@ -222,10 +222,13 @@ would cause on its own.
 ## Usage
 
 - **Pairing a new sensor:** hold the BOOT button while the board powers
-  up, or send `p` over the serial console once the dongle reports ready,
-  then trigger the sensor's own pairing action (battery pull-tab or reset
-  pinhole, depending on sensor type). The sensor is auto-assigned to a
-  free Matter endpoint and the mapping is persisted in flash.
+  up, send `p` over the serial console once the dongle reports ready, or
+  click "Start Pairing" on the web status page (`http://<device-ip>:8080/`
+  -- also shows a live status dot and a "Stop Pairing" button, so you can
+  cancel the 60-second window early without waiting it out). Then trigger
+  the sensor's own pairing action (battery pull-tab or reset pinhole,
+  depending on sensor type). The sensor is auto-assigned to a free Matter
+  endpoint and the mapping is persisted in flash.
 - **Commissioning in Alexa:** once flashed and connected to WiFi, the
   serial console prints a Matter manual pairing code and QR code URL
   every 10 seconds until commissioned. Add the device in the Alexa app
@@ -250,8 +253,10 @@ Two ways to trigger this:
 - Visit `http://<device-ip>:8080/` in a browser on the same WiFi network
   and click "Factory Reset" -- useful once the board is mounted somewhere
   the USB port isn't reachable. This page also shows commissioning
-  status, the pairing code/QR link when uncommissioned, free heap, and
-  each sensor's last-known state, with no authentication (it trusts the
+  status, live USB-bridge-connected/dongle-ready/pairing-mode indicators,
+  pairing controls, the pairing code/QR link when uncommissioned, free
+  heap, and each sensor's last-known state, with no authentication (it
+  trusts the
   local WiFi network as its security boundary -- don't port-forward it
   to the internet).
 
