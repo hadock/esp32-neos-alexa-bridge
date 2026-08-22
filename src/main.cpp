@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <Preferences.h>
 #include <Matter.h>
 #include <EspUsbHost.h>
@@ -349,6 +350,13 @@ static String BuildPortalPage() {
 // IP so the whole flow works with nothing but a browser: connect to
 // "esp_neos_bridge", visit http://192.168.4.1/, pick a scanned network,
 // enter its password, submit.
+//
+// The DNS server answers every query (any hostname at all) with our own
+// IP, and the web server redirects any unrecognized path to "/". Together
+// these are what make a phone/laptop's own "is there internet?" probe get
+// intercepted and auto-pop its captive-portal sign-in view, the same way
+// it would for hotel/coffee-shop WiFi -- no manual browser navigation
+// needed on most devices.
 static void RunWifiSetupPortal() {
   ScanNetworks();
 
@@ -357,6 +365,9 @@ static void RunWifiSetupPortal() {
   WiFi.softAP(kApSsid);
   Serial.printf("WiFi not configured. Connect to \"%s\" (open network) and visit http://%s/\n",
                 kApSsid, kApIP.toString().c_str());
+
+  static DNSServer dnsServer;
+  dnsServer.start(53, "*", kApIP);
 
   static WebServer portalServer(80);
   portalServer.on("/", HTTP_GET, [&]() {
@@ -376,9 +387,14 @@ static void RunWifiSetupPortal() {
     delay(500);
     ESP.restart();
   });
+  portalServer.onNotFound([&]() {
+    portalServer.sendHeader("Location", String("http://") + kApIP.toString() + "/");
+    portalServer.send(302);
+  });
   portalServer.begin();
 
   for (;;) {
+    dnsServer.processNextRequest();
     portalServer.handleClient();
     delay(5);
   }
@@ -473,10 +489,33 @@ static void handleSerialLine(String line) {
 
 static WebServer webServer(8080);
 
+// The page walks through setup in order rather than showing everything at
+// once: wait for the USB bridge -> wait for the dongle handshake -> pair at
+// least one sensor -> link with Alexa. Each later section only appears once
+// the one before it is actually done, matching the real order that things
+// need to happen in.
 static String BuildStatusPage() {
-  String html = F(
-      "<!DOCTYPE html><html><head><title>NEOS Bridge</title>"
-      "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+  bool usbOk = g_bridgeConnected;
+  bool dongleOk = g_dongle && g_dongle->IsReady();
+  bool scanning = g_dongle && g_dongle->IsScanning();
+  bool commissioned = Matter.isDeviceCommissioned();
+
+  size_t pairedCount = 0;
+  for (size_t i = 0; i < kMaxContact; i++) {
+    if (gContactSlot[i].inUse) pairedCount++;
+  }
+  for (size_t i = 0; i < kMaxMotion; i++) {
+    if (gMotionSlot[i].inUse) pairedCount++;
+  }
+
+  bool waitingOnHardware = !usbOk || !dongleOk;
+
+  String html = "<!DOCTYPE html><html><head><title>NEOS Bridge</title>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  if (waitingOnHardware) {
+    html += "<meta http-equiv='refresh' content='3'>";  // auto-refresh while just waiting
+  }
+  html += F(
       "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:0 1em}"
       "table{width:100%;border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:left}"
       "button{border:0;padding:.7em 1.2em;border-radius:6px;font-size:1em;margin-right:.5em}"
@@ -485,57 +524,63 @@ static String BuildStatusPage() {
       ".dot-ok{background:#16a34a}.dot-bad{background:#dc2626}</style>"
       "</head><body><h2>NEOS/WyzeSense Bridge</h2>");
 
-  html += "<p><b>Matter:</b> ";
-  html += Matter.isDeviceCommissioned() ? "commissioned" : "NOT commissioned";
-  html += "</p>";
-  if (!Matter.isDeviceCommissioned()) {
-    html += "<p><b>Pairing code:</b> " + Matter.getManualPairingCode() + "<br>";
-    html += "<a href=\"" + Matter.getOnboardingQRCodeUrl() + "\" target=\"_blank\">QR code link</a></p>";
+  if (!usbOk) {
+    html += F(
+        "<p><span class='dot dot-bad'></span><b>USB bridge:</b> not connected</p>"
+        "<p>Connect a NEOS/WyzeSense USB bridge dongle to the board's native USB port to "
+        "continue. This page refreshes automatically.</p></body></html>");
+    return html;
   }
 
+  if (!dongleOk) {
+    html += F(
+        "<p><span class='dot dot-ok'></span><b>USB bridge:</b> connected</p>"
+        "<p><span class='dot dot-bad'></span><b>Dongle handshake:</b> not ready</p>"
+        "<p>Talking to the bridge... this page refreshes automatically.</p></body></html>");
+    return html;
+  }
+
+  html += F(
+      "<p><span class='dot dot-ok'></span><b>USB bridge:</b> connected</p>"
+      "<p><span class='dot dot-ok'></span><b>Dongle handshake:</b> ready</p>");
   html += "<p><b>WiFi:</b> " + WiFi.localIP().toString() + "</p>";
+  html += "<p><b>Free heap:</b> " + String(ESP.getFreeHeap()) + " bytes (min " + String(ESP.getMinFreeHeap()) + ")</p>";
 
-  bool usbOk = g_bridgeConnected;
-  html += "<p><span class='dot ";
-  html += usbOk ? "dot-ok" : "dot-bad";
-  html += "'></span><b>USB bridge:</b> ";
-  html += usbOk ? "connected" : "not connected";
-  html += "</p>";
+  if (pairedCount == 0) {
+    html += F("<h3>Pair your first sensor</h3><p>No sensors paired yet.</p>");
+  } else {
+    html += F("<h3>Sensors</h3><table><tr><th>MAC</th><th>Type</th><th>Slot</th><th>Last known state</th></tr>");
+    for (size_t i = 0; i < kMaxContact; i++) {
+      if (!gContactSlot[i].inUse) continue;
+      bool lastOpen = prefsContactState.isKey(gContactSlot[i].mac) && prefsContactState.getBool(gContactSlot[i].mac);
+      html += "<tr><td>" + String(gContactSlot[i].mac) + "</td><td>contact</td><td>" + String(i) +
+              "</td><td>" + (lastOpen ? "open" : "closed") + "</td></tr>";
+    }
+    for (size_t i = 0; i < kMaxMotion; i++) {
+      if (!gMotionSlot[i].inUse) continue;
+      html += "<tr><td>" + String(gMotionSlot[i].mac) + "</td><td>motion</td><td>" + String(i) + "</td><td>--</td></tr>";
+    }
+    html += F("</table>");
+  }
 
-  bool dongleOk = g_dongle && g_dongle->IsReady();
-  html += "<p><span class='dot ";
-  html += dongleOk ? "dot-ok" : "dot-bad";
-  html += "'></span><b>Dongle handshake:</b> ";
-  html += dongleOk ? "ready" : "not ready";
-  html += "</p>";
-
-  bool scanning = g_dongle && g_dongle->IsScanning();
   html += "<p><span class='dot ";
   html += scanning ? "dot-ok" : "dot-bad";
   html += "'></span><b>Pairing mode:</b> ";
   html += scanning ? "ACTIVE -- trigger the new sensor's pairing action now" : "inactive";
   html += "</p>";
   html += "<form style='display:inline' method='POST' action='/pair-start'><button type='submit' class='action'";
-  if (scanning || !dongleOk) html += " disabled";
+  if (scanning) html += " disabled";
   html += ">Start Pairing</button></form>";
   html += "<form style='display:inline' method='POST' action='/pair-stop'><button type='submit' class='action'";
   if (!scanning) html += " disabled";
   html += ">Stop Pairing</button></form>";
 
-  html += "<p><b>Free heap:</b> " + String(ESP.getFreeHeap()) + " bytes (min " + String(ESP.getMinFreeHeap()) + ")</p>";
-
-  html += F("<h3>Sensors</h3><table><tr><th>MAC</th><th>Type</th><th>Slot</th><th>Last known state</th></tr>");
-  for (size_t i = 0; i < kMaxContact; i++) {
-    if (!gContactSlot[i].inUse) continue;
-    bool lastOpen = prefsContactState.isKey(gContactSlot[i].mac) && prefsContactState.getBool(gContactSlot[i].mac);
-    html += "<tr><td>" + String(gContactSlot[i].mac) + "</td><td>contact</td><td>" + String(i) +
-            "</td><td>" + (lastOpen ? "open" : "closed") + "</td></tr>";
+  if (commissioned) {
+    html += F("<p><b>Matter:</b> commissioned</p>");
+  } else if (pairedCount > 0) {
+    html += "<h3>Link with Alexa</h3><p><b>Pairing code:</b> " + Matter.getManualPairingCode() + "<br>";
+    html += "<a href=\"" + Matter.getOnboardingQRCodeUrl() + "\" target=\"_blank\">QR code link</a></p>";
   }
-  for (size_t i = 0; i < kMaxMotion; i++) {
-    if (!gMotionSlot[i].inUse) continue;
-    html += "<tr><td>" + String(gMotionSlot[i].mac) + "</td><td>motion</td><td>" + String(i) + "</td><td>--</td></tr>";
-  }
-  html += F("</table>");
 
   html += F(
       "<h3>Recovery</h3>"
