@@ -16,9 +16,14 @@
 // reboots -- otherwise Alexa would see it as a different device each time.
 //
 // Matter doesn't let the device push a friendly display name (that's
-// controller-side, set in the Alexa app after commissioning), so unlike
-// the fauxmoESP version there's no name registry or `name <MAC> <name>`
-// command here -- nothing to push it to.
+// controller-side, set in the Alexa app after commissioning) -- there's no
+// name registry here, nothing to push it to.
+//
+// WiFi credentials aren't hardcoded either: on first boot (or after a
+// WiFi reset -- hold BOOT for 5s during normal operation), the device
+// starts an open access point and setup portal (see RunWifiSetupPortal())
+// instead of connecting anywhere. secrets.h, if present, is only a
+// one-time seed for people who'd rather set it at build time.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -27,7 +32,20 @@
 #include <Matter.h>
 #include <EspUsbHost.h>
 #include "wyzesense_dongle.h"
+
+// secrets.h is now fully optional: it only serves as a one-time seed for
+// people who prefer setting WiFi credentials at build time. Everyone else
+// configures WiFi at runtime via the AP + setup-portal flow in
+// connectWiFi() -- see RunWifiSetupPortal() below.
+#if __has_include("secrets.h")
 #include "secrets.h"
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD ""
+#endif
 
 static EspUsbHost usb;
 static wyzesense::Dongle *g_dongle = nullptr;
@@ -50,13 +68,21 @@ static Preferences prefs;
 // make Alexa show a stale/wrong state for an unchanged sensor.
 static Preferences prefsContactState;
 
+// WiFi credentials, entered once through the setup portal (or seeded from
+// secrets.h) and persisted here from then on.
+static Preferences wifiPrefs;
+
 // GPIO0 is the board's BOOT button -- only meaningful to the ROM bootloader
 // very early in boot (for entering flash-download mode); once the app is
-// running it's a free input pin. Hold it down while the board powers up to
-// enter pairing mode automatically once the handshake completes.
+// running it's a free input pin. Held at startup: enters pairing mode once
+// the dongle handshake completes. Held for kWifiResetHoldMs at any point
+// during normal operation: wipes the stored WiFi credentials and reboots
+// into the setup portal, for reconfiguring a device that's already
+// mounted somewhere the USB port isn't reachable.
 static constexpr int kBootButtonPin = 0;
 static constexpr uint32_t kScanTimeoutMs = 60000;
 static constexpr uint16_t kMotionHoldTimeSeconds = 8;
+static constexpr uint32_t kWifiResetHoldMs = 5000;
 
 // --- Matter endpoint pool: fixed-size, sized to this exact box's hardware.
 // Bump these and reflash if you add more sensors. ---
@@ -231,10 +257,151 @@ static const char *SensorTypeName(wyzesense::SensorType t) {
   }
 }
 
+static bool LoadStoredWifiCreds(String &ssid, String &pass) {
+  if (!wifiPrefs.isKey("ssid")) return false;
+  ssid = wifiPrefs.getString("ssid", "");
+  pass = wifiPrefs.getString("pass", "");
+  return ssid.length() > 0;
+}
+
+static void SaveWifiCreds(const String &ssid, const String &pass) {
+  wifiPrefs.putString("ssid", ssid);
+  wifiPrefs.putString("pass", pass);
+}
+
+static void ClearWifiCreds() {
+  wifiPrefs.remove("ssid");
+  wifiPrefs.remove("pass");
+}
+
+struct ScannedNetwork {
+  String ssid;
+  int32_t rssi = 0;
+};
+static constexpr size_t kMaxScannedNetworks = 20;
+static ScannedNetwork gScannedNetworks[kMaxScannedNetworks];
+static size_t gScannedCount = 0;
+
+static void ScanNetworks() {
+  Serial.println("Scanning nearby WiFi networks...");
+  int n = WiFi.scanNetworks();
+  gScannedCount = 0;
+  for (int i = 0; i < n && gScannedCount < kMaxScannedNetworks; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) continue;
+    bool dup = false;
+    for (size_t j = 0; j < gScannedCount; j++) {
+      if (gScannedNetworks[j].ssid == ssid) {
+        dup = true;
+        if (WiFi.RSSI(i) > gScannedNetworks[j].rssi) gScannedNetworks[j].rssi = WiFi.RSSI(i);
+        break;
+      }
+    }
+    if (!dup) {
+      gScannedNetworks[gScannedCount].ssid = ssid;
+      gScannedNetworks[gScannedCount].rssi = WiFi.RSSI(i);
+      gScannedCount++;
+    }
+  }
+  // Strongest signal first (small N -- a plain insertion sort is plenty).
+  for (size_t i = 1; i < gScannedCount; i++) {
+    ScannedNetwork key = gScannedNetworks[i];
+    size_t j = i;
+    while (j > 0 && gScannedNetworks[j - 1].rssi < key.rssi) {
+      gScannedNetworks[j] = gScannedNetworks[j - 1];
+      j--;
+    }
+    gScannedNetworks[j] = key;
+  }
+  Serial.printf("Found %u network(s)\n", (unsigned)gScannedCount);
+}
+
+static constexpr const char *kApSsid = "esp_neos_bridge";
+static const IPAddress kApIP(192, 168, 4, 1);
+
+static String BuildPortalPage() {
+  String html = F(
+      "<!DOCTYPE html><html><head><title>NEOS Bridge Setup</title>"
+      "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+      "<style>body{font-family:sans-serif;max-width:420px;margin:2em auto;padding:0 1em}"
+      "select,input{width:100%;padding:.5em;margin:.3em 0 1em;font-size:1em;box-sizing:border-box}"
+      "button{background:#2563eb;color:#fff;border:0;padding:.7em 1.2em;border-radius:6px;"
+      "font-size:1em;width:100%}</style></head><body>"
+      "<h2>NEOS Bridge -- WiFi Setup</h2>"
+      "<form method='POST' action='/configure'>"
+      "<label>Network</label><select name='ssid'>");
+  for (size_t i = 0; i < gScannedCount; i++) {
+    html += "<option value=\"" + gScannedNetworks[i].ssid + "\">" + gScannedNetworks[i].ssid +
+            " (" + String(gScannedNetworks[i].rssi) + " dBm)</option>";
+  }
+  html += F(
+      "</select>"
+      "<label>Password (leave blank for open networks)</label>"
+      "<input type='password' name='password' autocomplete='off'>"
+      "<button type='submit'>Connect</button>"
+      "</form></body></html>");
+  return html;
+}
+
+// Blocking: runs until a network is configured through the portal, then
+// reboots -- there's nothing else useful for setup() to do without WiFi
+// credentials anyway. Starts an open (no password) access point at a fixed
+// IP so the whole flow works with nothing but a browser: connect to
+// "esp_neos_bridge", visit http://192.168.4.1/, pick a scanned network,
+// enter its password, submit.
+static void RunWifiSetupPortal() {
+  ScanNetworks();
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(kApIP, kApIP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP(kApSsid);
+  Serial.printf("WiFi not configured. Connect to \"%s\" (open network) and visit http://%s/\n",
+                kApSsid, kApIP.toString().c_str());
+
+  static WebServer portalServer(80);
+  portalServer.on("/", HTTP_GET, [&]() {
+    portalServer.send(200, "text/html", BuildPortalPage());
+  });
+  portalServer.on("/configure", HTTP_POST, [&]() {
+    String ssid = portalServer.arg("ssid");
+    String password = portalServer.arg("password");
+    if (ssid.length() == 0) {
+      portalServer.send(400, "text/html", "<p>No network selected. <a href='/'>Back</a></p>");
+      return;
+    }
+    SaveWifiCreds(ssid, password);
+    portalServer.send(200, "text/html",
+                       "<!DOCTYPE html><html><body><p>Saved. Rebooting and connecting to \"" + ssid +
+                           "\"...</p></body></html>");
+    delay(500);
+    ESP.restart();
+  });
+  portalServer.begin();
+
+  for (;;) {
+    portalServer.handleClient();
+    delay(5);
+  }
+}
+
 static void connectWiFi() {
-  Serial.printf("Connecting to WiFi \"%s\"", WIFI_SSID);
+  String ssid, pass;
+  if (!LoadStoredWifiCreds(ssid, pass)) {
+    // No stored credentials yet. secrets.h (if present) seeds them once, for
+    // people who prefer setting WiFi at build time over the setup portal.
+    if (strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "your-wifi-ssid") != 0) {
+      ssid = WIFI_SSID;
+      pass = WIFI_PASSWORD;
+      SaveWifiCreds(ssid, pass);
+      Serial.println("Seeded WiFi credentials from secrets.h into flash.");
+    } else {
+      RunWifiSetupPortal();  // never returns -- reboots once configured
+    }
+  }
+
+  Serial.printf("Connecting to WiFi \"%s\"", ssid.c_str());
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(ssid.c_str(), pass.c_str());
 
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
@@ -246,6 +413,10 @@ static void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
   } else {
+    // Deliberately not falling back to the setup portal here: a stored SSID
+    // that's merely temporarily unreachable (router reboot, etc.) shouldn't
+    // wipe good credentials. If they're genuinely wrong, hold BOOT for 5s
+    // once the device is reachable via USB again to clear them.
     Serial.println("WiFi connect FAILED (will keep retrying in background) -- Alexa integration won't work until connected.");
   }
 }
@@ -419,6 +590,7 @@ void setup() {
 
   prefs.begin("wyzesense", /*readOnly=*/false);
   prefsContactState.begin("wz_ct_state", /*readOnly=*/false);
+  wifiPrefs.begin("wz_wifi", /*readOnly=*/false);
 
   connectWiFi();
   Serial.printf("[heap] after WiFi connect: free=%u min_free=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
@@ -538,6 +710,27 @@ void loop() {
   uint32_t now = millis();
 
   webServer.handleClient();
+
+  // Hold BOOT for kWifiResetHoldMs at any point during normal operation to
+  // wipe stored WiFi credentials and reboot into the setup portal -- for
+  // reconfiguring a device that's already mounted somewhere the USB port
+  // isn't reachable. Separate from the "BOOT held at startup" check in
+  // OnReady(), which is a one-shot look at the pin, not a hold duration.
+  static uint32_t bootHeldSinceMs = 0;
+  static bool wifiResetTriggered = false;
+  if (digitalRead(kBootButtonPin) == LOW) {
+    if (bootHeldSinceMs == 0) bootHeldSinceMs = now;
+    if (!wifiResetTriggered && (now - bootHeldSinceMs) >= kWifiResetHoldMs) {
+      wifiResetTriggered = true;
+      Serial.println("BOOT held 5s -- clearing WiFi credentials and rebooting into setup mode...");
+      ClearWifiCreds();
+      delay(200);
+      ESP.restart();
+    }
+  } else {
+    bootHeldSinceMs = 0;
+    wifiResetTriggered = false;
+  }
 
   if (g_handshakePending && (now - g_connectedAtMs) >= kHandshakeSettleMs) {
     g_handshakePending = false;

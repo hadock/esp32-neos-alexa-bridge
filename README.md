@@ -91,14 +91,41 @@ the dongle that you may not need.)
 
 1. Install [PlatformIO](https://platformio.org/) (VS Code extension or
    `pio` CLI).
-2. Copy `include/secrets.h.example` to `include/secrets.h` and fill in
-   your WiFi SSID/password. This file is gitignored -- it will never be
-   committed.
-3. **Build the fixed Matter library** (see below) -- required until
+2. **Build the fixed Matter library** (see below) -- required until
    arduino-esp32 ships a release containing PR #12842.
-4. `pio run -t upload` (or use PlatformIO's Upload button).
+3. `pio run -t upload` (or use PlatformIO's Upload button).
+4. Connect to WiFi (see "WiFi setup" below) -- no `secrets.h` or rebuild
+   needed for this.
 5. Open the serial monitor at 115200 baud on the UART port to watch boot
    logs, pair sensors, and read the Matter commissioning code.
+
+### WiFi setup
+
+No WiFi credentials are baked into the firmware at build time. On first
+boot (or anytime after a WiFi reset), the device starts its own open
+WiFi network and a small setup page instead of trying to connect
+anywhere:
+
+1. Connect your phone or laptop to the **`esp_neos_bridge`** WiFi
+   network (open, no password).
+2. Visit **http://192.168.4.1/** in a browser.
+3. Pick your home network from the dropdown (populated from a scan the
+   device runs right before starting its own network) and enter its
+   password.
+4. Submit. The device saves the credentials to flash, reboots, and
+   connects to your network from then on.
+
+**To reconfigure later** (moved to a new network, wrong password, etc.):
+hold the **BOOT** button for about 5 seconds while the device is running
+normally. It clears the stored credentials and reboots straight back
+into the setup flow above -- no USB/serial access needed, which matters
+once the board is mounted somewhere physically awkward to reach.
+
+If you'd rather set WiFi at build time instead of using the portal, copy
+`include/secrets.h.example` to `include/secrets.h` (gitignored, never
+committed) and fill in real credentials -- this seeds the stored
+credentials once, on the very first boot with nothing configured yet,
+and is otherwise ignored (see the comments in that file).
 
 ### Building the fixed Matter library
 
