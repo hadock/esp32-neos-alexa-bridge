@@ -29,6 +29,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include <Matter.h>
 #include <EspUsbHost.h>
@@ -84,6 +85,11 @@ static constexpr int kBootButtonPin = 0;
 static constexpr uint32_t kScanTimeoutMs = 60000;
 static constexpr uint16_t kMotionHoldTimeSeconds = 8;
 static constexpr uint32_t kWifiResetHoldMs = 5000;
+
+// Onboard WS2812 RGB LED (per this board's own pinout reference,
+// docs/images/esp32-s3-n16r8-pinout.jpeg). Blinks blue while the WiFi
+// setup portal/AP mode is active; off otherwise.
+static constexpr int kRgbLedPin = 48;
 
 // --- Matter endpoint pool: fixed-size, sized to this exact box's hardware.
 // Bump these and reflash if you add more sensors. ---
@@ -273,6 +279,13 @@ static void SaveWifiCreds(const String &ssid, const String &pass) {
 static void ClearWifiCreds() {
   wifiPrefs.remove("ssid");
   wifiPrefs.remove("pass");
+  // Also force the setup portal on the very next boot, bypassing the
+  // secrets.h seed. Without this, clearing just ssid/pass is a no-op
+  // whenever secrets.h has real credentials baked in (as it does for
+  // anyone building locally with their own copy) -- connectWiFi() would
+  // otherwise just reseed from secrets.h again immediately and reconnect,
+  // never actually reaching AP mode.
+  wifiPrefs.putBool("force_ap", true);
 }
 
 struct ScannedNetwork {
@@ -319,6 +332,11 @@ static void ScanNetworks() {
 
 static constexpr const char *kApSsid = "esp_neos_bridge";
 static const IPAddress kApIP(192, 168, 4, 1);
+
+// Once connected to a real network, reachable at http://esp32neos.local:8080/
+// regardless of whatever IP DHCP happens to hand out -- no need to hunt for
+// the address (router admin page, `arp -a`, etc.) after leaving AP mode.
+static constexpr const char *kMdnsHostname = "esp32neos";
 
 static String BuildPortalPage() {
   String html = F(
@@ -393,19 +411,36 @@ static void RunWifiSetupPortal() {
   });
   portalServer.begin();
 
+  uint32_t lastBlinkMs = 0;
+  bool ledOn = false;
   for (;;) {
     dnsServer.processNextRequest();
     portalServer.handleClient();
+
+    uint32_t now = millis();
+    if (now - lastBlinkMs >= 500) {
+      lastBlinkMs = now;
+      ledOn = !ledOn;
+      rgbLedWrite(kRgbLedPin, 0, 0, ledOn ? 40 : 0);  // dim blue blink, not full brightness
+    }
+
     delay(5);
   }
 }
 
 static void connectWiFi() {
+  // One-shot: a BOOT-held WiFi reset sets this to force the portal even
+  // though secrets.h (if present) would otherwise seed real credentials
+  // right back in on this very boot.
+  bool forceAp = wifiPrefs.getBool("force_ap", false);
+  if (forceAp) wifiPrefs.remove("force_ap");
+
   String ssid, pass;
-  if (!LoadStoredWifiCreds(ssid, pass)) {
-    // No stored credentials yet. secrets.h (if present) seeds them once, for
-    // people who prefer setting WiFi at build time over the setup portal.
-    if (strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "your-wifi-ssid") != 0) {
+  if (forceAp || !LoadStoredWifiCreds(ssid, pass)) {
+    // No stored credentials yet (or a forced reset). secrets.h (if present)
+    // seeds them once, for people who prefer setting WiFi at build time
+    // over the setup portal -- but never when forceAp is set.
+    if (!forceAp && strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "your-wifi-ssid") != 0) {
       ssid = WIFI_SSID;
       pass = WIFI_PASSWORD;
       SaveWifiCreds(ssid, pass);
@@ -417,6 +452,7 @@ static void connectWiFi() {
 
   Serial.printf("Connecting to WiFi \"%s\"", ssid.c_str());
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(kMdnsHostname);  // must be set before begin() to take effect
   WiFi.begin(ssid.c_str(), pass.c_str());
 
   uint32_t start = millis();
@@ -428,6 +464,14 @@ static void connectWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+    if (MDNS.begin(kMdnsHostname)) {
+      MDNS.addService("http", "tcp", 8080);
+      Serial.printf("mDNS: reachable at http://%s.local:8080/ (falls back to the IP above if your\n",
+                     kMdnsHostname);
+      Serial.println("      network/device doesn't resolve .local names)");
+    } else {
+      Serial.println("mDNS: failed to start (use the IP address above instead)");
+    }
   } else {
     // Deliberately not falling back to the setup portal here: a stored SSID
     // that's merely temporarily unreachable (router reboot, etc.) shouldn't
@@ -626,6 +670,7 @@ static void SetupWebServer() {
 
 void setup() {
   pinMode(kBootButtonPin, INPUT_PULLUP);
+  rgbLedWrite(kRgbLedPin, 0, 0, 0);  // known-off state; RunWifiSetupPortal() blinks it blue itself
 
   Serial.begin(115200);
   delay(1500);

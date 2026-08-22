@@ -118,6 +118,16 @@ anywhere:
 4. Submit. The device saves the credentials to flash, reboots, and
    connects to your network from then on.
 
+Once connected, find it at **`http://esp32neos.local:8080/`** -- no need
+to hunt down whatever IP address DHCP happened to hand out. (Falls back
+to the device's actual IP, shown on the serial console and, on most
+networks, in your router's connected-devices list, if your network/OS
+doesn't resolve `.local` mDNS names -- rare in practice, but some
+routers/guest networks block multicast traffic.) The onboard RGB LED
+also blinks blue the whole time the device is in setup/AP mode, off
+otherwise, so you can tell at a glance whether it's still waiting to be
+configured.
+
 **To reconfigure later** (moved to a new network, wrong password, etc.):
 hold the **BOOT** button for about 5 seconds while the device is running
 normally. It clears the stored credentials and reboots straight back
@@ -253,7 +263,7 @@ would cause on its own.
 
 - **Pairing a new sensor:** hold the BOOT button while the board powers
   up, send `p` over the serial console once the dongle reports ready, or
-  click "Start Pairing" on the web status page (`http://<device-ip>:8080/`
+  click "Start Pairing" on the web status page (`http://esp32neos.local:8080/`
   -- also shows a live status dot and a "Stop Pairing" button, so you can
   cancel the 60-second window early without waiting it out). Then trigger
   the sensor's own pairing action (battery pull-tab or reset pinhole,
@@ -280,8 +290,8 @@ would cause on its own.
 Two ways to trigger this:
 
 - Send `factory-reset` over the serial console.
-- Visit `http://<device-ip>:8080/` in a browser on the same WiFi network
-  and click "Factory Reset" -- useful once the board is mounted somewhere
+- Visit `http://esp32neos.local:8080/` in a browser on the same WiFi
+  network and click "Factory Reset" -- useful once the board is mounted somewhere
   the USB port isn't reachable. This page walks through setup in order
   (USB bridge connected -> dongle handshake ready -> pair a sensor -> link
   with Alexa), auto-refreshing while waiting on hardware and only showing
